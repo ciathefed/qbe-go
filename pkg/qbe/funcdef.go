@@ -2,7 +2,6 @@ package qbe
 
 // Convention: temporaries of the form /%<name>.\d+/ and labels of the form
 // /@<name>.\d+/ are reserved for automatic name generation.
-
 import (
 	"fmt"
 	"strings"
@@ -15,15 +14,16 @@ type param struct {
 
 // A Function represents a function definition in QBE IL.
 type Function struct {
-	Linkage               // The linkage of the function, cannot be thread
-	retType  RetType      // The return type of the function
-	name     GlobalSymbol // The symbol that references the function
-	env      *Temporary   // Parameter used to implement closures
-	params   []param
-	variadic bool // Set if function is variadic.
-	blocks   []*Block
-	labelGen uint
-	tmpGen   uint
+	Linkage                   // The linkage of the function, cannot be thread
+	retType      RetType      // The return type of the function
+	name         GlobalSymbol // The symbol that references the function
+	env          *Temporary   // Parameter used to implement closures
+	params       []param
+	variadic     bool // Set if function is variadic.
+	variadicFrom int  // Index where variadic parameters start (NEW FIELD)
+	blocks       []*Block
+	labelGen     uint
+	tmpGen       uint
 }
 
 func (f *Function) isDefinition() {}
@@ -35,15 +35,16 @@ func newFunction(name GlobalSymbol, retType RetType) *Function {
 		panic("return type cannot be nil")
 	}
 	return &Function{
-		Linkage:  PrivateLinkage(),
-		retType:  retType,
-		name:     name,
-		env:      nil,
-		params:   nil,
-		variadic: false,
-		blocks:   nil,
-		labelGen: 0,
-		tmpGen:   0,
+		Linkage:      PrivateLinkage(),
+		retType:      retType,
+		name:         name,
+		env:          nil,
+		params:       nil,
+		variadic:     false,
+		variadicFrom: 0,
+		blocks:       nil,
+		labelGen:     0,
+		tmpGen:       0,
 	}
 }
 
@@ -52,14 +53,26 @@ func (f *Function) Name() GlobalSymbol {
 	return f.name
 }
 
+// RetType returns the return type of f.
+func (f *Function) RetType() RetType {
+	return f.retType
+}
+
 // SetEnv sets the environment temporary of f to env.
 func (f *Function) SetEnv(env Temporary) {
 	f.env = &env
 }
 
-// SetVariadic sets f as variadic.
+// SetVariadic sets f as variadic with variadic parameters starting from the current parameter count.
 func (f *Function) SetVariadic() {
 	f.variadic = true
+	f.variadicFrom = len(f.params)
+}
+
+// SetVariadicFrom sets f as variadic with variadic parameters starting from the specified index.
+func (f *Function) SetVariadicFrom(index int) {
+	f.variadic = true
+	f.variadicFrom = index
 }
 
 // InsertParam inserts at the end of the parameter list of f a new parameter named name with type type_.
@@ -113,17 +126,36 @@ func (f *Function) String() string {
 	if f.env != nil {
 		builder.WriteString("env ")
 		builder.WriteString(f.env.String())
-		builder.WriteString(", ")
+		if len(f.params) > 0 || f.variadic {
+			builder.WriteString(", ")
+		}
 	}
-	for _, param := range f.params {
+
+	// Write parameters with variadic marker at the correct position
+	for i, param := range f.params {
+		// Insert variadic marker before variadic parameters
+		if f.variadic && i == f.variadicFrom {
+			builder.WriteString("..., ")
+		}
+
 		builder.WriteString(param.Type.Name())
 		builder.WriteByte(' ')
 		builder.WriteString(param.Name.String())
-		builder.WriteString(", ")
+
+		// Add comma if not the last parameter
+		if i < len(f.params)-1 {
+			builder.WriteString(", ")
+		}
 	}
-	if f.variadic {
+
+	// Handle case where there are no variadic params but function is marked variadic
+	if f.variadic && f.variadicFrom >= len(f.params) {
+		if len(f.params) > 0 {
+			builder.WriteString(", ")
+		}
 		builder.WriteString("...")
 	}
+
 	builder.WriteString(") {\n")
 	for _, block := range f.blocks {
 		builder.WriteString(block.String())
